@@ -15,12 +15,18 @@
 #include <Preferences.h>
 
 #define DEBUG
-
+#define TIME_LIMIT 5000
 
 //定义按键和按键指示灯，这个按键用于切换工作状态
 #define PIN_INPUT 34
 OneButton button;
 unsigned long inerface_status_time_stamp = 0;
+
+//旋转编码器定义部分
+#define CLK 39 // CLK ENCODER 
+#define DT 36 // DT ENCODER 
+ESP32Encoder encoder;
+
 //状态助记符和状态机参数
 #define START_INTERFACE 0
 #define CW_INTERFACE 1
@@ -56,6 +62,10 @@ U8G2_SSD1306_128X64_NONAME_1_4W_HW_SPI u8g2(U8G2_R0, 5, 12, 13);
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 
+//一些重要的全局变量
+uint16_t power_set = 200;
+uint16_t voltage_set = 2480;
+
 //每次按键按下都会出发该函数，进而切换状态
 //在每次切换状态时，还有一些工作要做
 //虽然这种状态机的方式还是很复杂，但是起码把运行和状态切换进行了解耦
@@ -67,26 +77,69 @@ void ButtonClick(){
         case CW_INTERFACE:
             //“恒功率待机界面”的操作会使得系统进入“恒功率设置界面”
             interface_status = WSET_INTERFACE;
+            //首次进入WSET界面，要执行状态初始化
+            u8g2.firstPage();
+            do {
+                u8g2.setFont(u8g2_font_inb24_mf);
+                u8g2.setCursor(3, 31);
+                u8g2.print("CW:");
+                u8g2.setCursor(3, 60);
+                u8g2.print(power_set);u8g2.print("W");
+            } while ( u8g2.nextPage() );
             //重置界面倒计时，编码器旋转也会重置倒计时
             inerface_status_time_stamp = millis();            
             break;
         case CV_INTERFACE:
             //“恒压待机界面”的操作会使得系统进入“恒压设置界面”
             interface_status = VSET_INTERFACE;
+            //首次进入VSET界面，要执行状态初始化
+            u8g2.firstPage();
+            do {
+                u8g2.setFont(u8g2_font_inb24_mf);
+                u8g2.setCursor(3, 28);
+                u8g2.print("CV:");
+                u8g2.setCursor(3, 60);
+                u8g2.print(voltage_set/100.0F,1);u8g2.print("V");
+            } while ( u8g2.nextPage() );
             //重置界面倒计时，编码器旋转也会重置倒计时
             inerface_status_time_stamp = millis();   
             break;
         case WSET_INTERFACE:
             //“恒功率设置界面”的操作会使得系统进入“恒压设置界面”，如此循环
             interface_status = VSET_INTERFACE;
+            //首次进入VSET界面，要执行状态初始化
+            u8g2.firstPage();
+            do {
+                u8g2.setFont(u8g2_font_inb24_mf);
+                u8g2.setCursor(3, 28);
+                u8g2.print("CV:");
+                u8g2.setCursor(3, 60);
+                u8g2.print(voltage_set/100.0F,1);u8g2.print("V");
+            } while ( u8g2.nextPage() );
             //重置界面倒计时，编码器旋转也会重置倒计时
             inerface_status_time_stamp = millis();
             break;
         case VSET_INTERFACE:
             interface_status = ITEMS_INTERFACE;
+            //首次进入ITEMS_INTERFACE界面，要执行状态初始化
+            u8g2.firstPage();
+            do {
+                u8g2.setFont(u8g2_font_inb24_mf);
+                u8g2.setCursor(3, 28);
+                u8g2.print("ITEMS:");
+            } while ( u8g2.nextPage() );
             break;
         case ITEMS_INTERFACE:
             interface_status = WSET_INTERFACE;
+            //首次进入WSET界面，要执行状态初始化
+            u8g2.firstPage();
+            do {
+                u8g2.setFont(u8g2_font_inb24_mf);
+                u8g2.setCursor(3, 28);
+                u8g2.print("CW:");
+                u8g2.setCursor(3, 60);
+                u8g2.print(power_set);u8g2.print("W");
+            } while ( u8g2.nextPage() );
             //重置界面倒计时，编码器旋转也会重置倒计时
             inerface_status_time_stamp = millis();
             break;        
@@ -107,7 +160,7 @@ void TimeCountdownTick(){
     switch (interface_status){
         case START_INTERFACE:
             //需要倒计时5S进入主界面
-            if((millis() - inerface_status_time_stamp) > 5000){
+            if((millis() - inerface_status_time_stamp) > TIME_LIMIT){
                 interface_status = last_interface_status;
                 #ifdef DEBUG
                 Serial.print("CountDown Change Status -- ");
@@ -117,7 +170,7 @@ void TimeCountdownTick(){
             break;
         case WSET_INTERFACE:
             //需要倒计时5S进入主界面
-            if((millis() - inerface_status_time_stamp) > 5000){
+            if((millis() - inerface_status_time_stamp) > TIME_LIMIT){
                 interface_status = CW_INTERFACE;
                 #ifdef DEBUG
                 Serial.print("CountDown Change Status -- ");
@@ -127,7 +180,7 @@ void TimeCountdownTick(){
             break;
         case VSET_INTERFACE:
             //需要倒计时5S进入主界面
-            if((millis() - inerface_status_time_stamp) > 5000){
+            if((millis() - inerface_status_time_stamp) > TIME_LIMIT){
                 interface_status = CV_INTERFACE;
                 #ifdef DEBUG
                 Serial.print("CountDown Change Status -- ");
@@ -140,7 +193,6 @@ void TimeCountdownTick(){
     }
 }
 
-
 void setup(){
     Serial.begin(115200);
 
@@ -149,7 +201,9 @@ void setup(){
     //初始化按键设置
     button.setup(PIN_INPUT, INPUT_PULLUP, true);
     button.attachClick(ButtonClick);
-
+	//旋转编码器初始化部分
+	encoder.attachHalfQuad(DT,CLK);
+	encoder.setCount(0);
     //取出永久存储的设置
     preferences.begin("nvs-log", false);
     preferences.getBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
@@ -206,21 +260,55 @@ void loop(){
 
     }
     if(CW_INTERFACE == interface_status){
-        
+        //显示和更新屏幕
+
     }
     if(CV_INTERFACE == interface_status){
         
     }
     if(WSET_INTERFACE == interface_status){
-        
+        int64_t encoderpos = encoder.getCount();
+        if (0 != encoderpos){
+            power_set = power_set + encoderpos;
+            power_set = MAX(power_set,50);
+            power_set = MIN(power_set,300);
+            u8g2.firstPage();
+            do {
+                u8g2.setFont(u8g2_font_inb24_mf);
+                u8g2.setCursor(3, 28);
+                u8g2.print("CW:");
+                u8g2.setCursor(3, 60);
+                u8g2.print(power_set);u8g2.print("W");
+            } while ( u8g2.nextPage() );
+            //重置界面倒计时，编码器旋转也会重置倒计时
+            inerface_status_time_stamp = millis(); 
+            //每次都清零编码器，省了不少事
+            encoder.setCount(0);
+		}        
     }
     if(VSET_INTERFACE == interface_status){
-        
+        int64_t encoderpos = encoder.getCount();
+        if (0 != encoderpos){
+            voltage_set = voltage_set + encoderpos*5;
+            voltage_set = MAX(voltage_set,500);
+            voltage_set = MIN(voltage_set,6000);
+            u8g2.firstPage();
+            do {
+                u8g2.setFont(u8g2_font_inb24_mf);
+                u8g2.setCursor(3, 28);
+                u8g2.print("CV:");
+                u8g2.setCursor(3, 60);
+                u8g2.print(voltage_set/100.0F,1);u8g2.print("V");
+            } while ( u8g2.nextPage() );
+            //重置界面倒计时，编码器旋转也会重置倒计时
+            inerface_status_time_stamp = millis(); 
+            //每次都清零编码器，省了不少事
+            encoder.setCount(0);
+		}       
     }
     if(ITEMS_INTERFACE == interface_status){
         
     }
-
 }
 
 
