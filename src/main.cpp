@@ -66,6 +66,27 @@ U8G2_SSD1306_128X64_NONAME_1_4W_HW_SPI u8g2(U8G2_R0, 5, 12, 13);
 uint16_t power_set = 200;
 uint16_t voltage_set = 2480;
 
+// //所有的运行参数一律放入一个结构体，方便管理
+// struct datatype {
+//     uint16_t output_power = 0;
+//     uint16_t cadence = 0;
+//     uint16_t heart_rate = 0;
+//     uint16_t trip_time = 0;
+
+//     uint16_t max_output_power = 0;
+//     uint16_t max_cadence = 0;
+//     uint16_t max_heart_rate = 0;
+
+//     uint16_t odo_time = 0;
+//     uint16_t odo_wh  = 0;
+//     uint16_t running_mode = 0;
+//     uint16_t running_setting = 0;
+
+//     uint16_t voltage_in = 0;
+//     uint16_t voltage_out = 0;
+//     uint16_t current_out = 0;
+// };
+// datatype data_details = {0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 //每次按键按下都会出发该函数，进而切换状态
 //在每次切换状态时，还有一些工作要做
 //虽然这种状态机的方式还是很复杂，但是起码把运行和状态切换进行了解耦
@@ -261,6 +282,12 @@ void loop(){
     }
     if(CW_INTERFACE == interface_status){
         //显示和更新屏幕
+
+        //驱动电源板，不断改变其设置
+
+        //更新永久保存区设定数据
+
+        //更新详细参数内容
 
     }
     if(CV_INTERFACE == interface_status){
