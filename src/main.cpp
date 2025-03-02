@@ -4,8 +4,7 @@
 
 
 
-
-
+#include "OneButton.h"
 #include <ESP32Encoder.h> 
 #include <Arduino.h>
 #include <U8g2lib.h>
@@ -15,7 +14,14 @@
 #include "BLEDevice.h"
 #include <Preferences.h>
 
-//状态助记符
+#define DEBUG
+
+
+//定义按键和按键指示灯，这个按键用于切换工作状态
+#define PIN_INPUT 34
+OneButton button;
+unsigned long inerface_status_time_stamp = 0;
+//状态助记符和状态机参数
 #define START_INTERFACE 0
 #define CW_INTERFACE 1
 #define CV_INTERFACE 2
@@ -23,18 +29,181 @@
 #define VSET_INTERFACE 4
 #define ITEMS_INTERFACE 5
 uint8_t interface_status = 0;
+//上次复位前运行的状态
+uint8_t last_interface_status = 1;
+
+//永久存储部分
+Preferences preferences;
+//结构体才是正道
+struct logtype {
+    uint32_t ODO_Ws;
+    uint32_t ODO_HS;
+    uint32_t TRIP_Ws;
+    uint32_t TRIP_HS;
+    uint32_t LAST_MODE;
+    uint32_t LAST_SETTING;
+};
+logtype nvs_logger = {0,0,0,0,1,200};
+// nvs_logger.cumulative_Ws = nvs_logger.cumulative_Ws + output_power;
+// nvs_logger.cumulative_Seconds ++;
+// preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
+
+
+//屏幕相关定义
+//U8G2_SSD1306_128X64_NONAME_1_4W_SW_SPI u8g2(U8G2_R0, /* clock=*/ 13, /* data=*/ 11, /* cs=*/ 10, /* dc=*/ 9, /* reset=*/ 8);
+U8G2_SSD1306_128X64_NONAME_1_4W_HW_SPI u8g2(U8G2_R0, 5, 12, 13);
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 
+//每次按键按下都会出发该函数，进而切换状态
+//在每次切换状态时，还有一些工作要做
+//虽然这种状态机的方式还是很复杂，但是起码把运行和状态切换进行了解耦
+void ButtonClick(){
+    // Serial.print("buttonClicked");
+    switch (interface_status){
+        case START_INTERFACE:
+            break;
+        case CW_INTERFACE:
+            //“恒功率待机界面”的操作会使得系统进入“恒功率设置界面”
+            interface_status = WSET_INTERFACE;
+            //重置界面倒计时，编码器旋转也会重置倒计时
+            inerface_status_time_stamp = millis();            
+            break;
+        case CV_INTERFACE:
+            //“恒压待机界面”的操作会使得系统进入“恒压设置界面”
+            interface_status = VSET_INTERFACE;
+            //重置界面倒计时，编码器旋转也会重置倒计时
+            inerface_status_time_stamp = millis();   
+            break;
+        case WSET_INTERFACE:
+            //“恒功率设置界面”的操作会使得系统进入“恒压设置界面”，如此循环
+            interface_status = VSET_INTERFACE;
+            //重置界面倒计时，编码器旋转也会重置倒计时
+            inerface_status_time_stamp = millis();
+            break;
+        case VSET_INTERFACE:
+            interface_status = ITEMS_INTERFACE;
+            break;
+        case ITEMS_INTERFACE:
+            interface_status = WSET_INTERFACE;
+            //重置界面倒计时，编码器旋转也会重置倒计时
+            inerface_status_time_stamp = millis();
+            break;        
+        default:
+            break;
+    }
+    #ifdef DEBUG
+    Serial.print("Button Click Change Status -- ");
+    Serial.println(interface_status);
+	#endif
+
+
+}
+//状态机的另一个驱动来自时间的倒计时，该函数是不断重复执行的
+void TimeCountdownTick(){
+    //开机就重置倒计时，为开机界面倒数
+    //借助按键函数，每次更换为倒计时状态就重置定时器
+    switch (interface_status){
+        case START_INTERFACE:
+            //需要倒计时5S进入主界面
+            if((millis() - inerface_status_time_stamp) > 5000){
+                interface_status = last_interface_status;
+                #ifdef DEBUG
+                Serial.print("CountDown Change Status -- ");
+                Serial.println(interface_status);
+                #endif
+            }
+            break;
+        case WSET_INTERFACE:
+            //需要倒计时5S进入主界面
+            if((millis() - inerface_status_time_stamp) > 5000){
+                interface_status = CW_INTERFACE;
+                #ifdef DEBUG
+                Serial.print("CountDown Change Status -- ");
+                Serial.println(interface_status);
+                #endif
+            }
+            break;
+        case VSET_INTERFACE:
+            //需要倒计时5S进入主界面
+            if((millis() - inerface_status_time_stamp) > 5000){
+                interface_status = CV_INTERFACE;
+                #ifdef DEBUG
+                Serial.print("CountDown Change Status -- ");
+                Serial.println(interface_status);
+                #endif
+            }
+            break;
+        default:
+            break;
+    }
+}
+
 
 void setup(){
+    Serial.begin(115200);
+
+    //初始化开机倒计时
+    inerface_status_time_stamp = millis();
+    //初始化按键设置
+    button.setup(PIN_INPUT, INPUT_PULLUP, true);
+    button.attachClick(ButtonClick);
+
+    //取出永久存储的设置
+    preferences.begin("nvs-log", false);
+    preferences.getBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
+    last_interface_status = nvs_logger.LAST_MODE;
+
+    //显示部分改为显示累积数值
+    u8g2.begin();
+    u8g2.firstPage();
+    do {
+        u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.setCursor(3, 13);
+        u8g2.print("ODO:");u8g2.print((nvs_logger.ODO_Ws)/3600);u8g2.print("WH");
+        u8g2.setCursor(3, 23);
+        u8g2.print("ODO:");u8g2.print(nvs_logger.ODO_HS/3600);u8g2.print("H");u8g2.print(nvs_logger.ODO_HS%3600);u8g2.print("S");
+        u8g2.setCursor(3, 33);
+        u8g2.print("TRIP:");u8g2.print((nvs_logger.TRIP_Ws)/3600);u8g2.print("WH");
+        u8g2.setCursor(3, 43);
+        u8g2.print("TRIP:");u8g2.print(nvs_logger.TRIP_HS);u8g2.print("S");
+        u8g2.setCursor(3, 53);
+        u8g2.print("LAST_MODE:");u8g2.print(nvs_logger.LAST_MODE);
+        u8g2.setCursor(3, 63);
+        u8g2.print("LAST_SETTING:");u8g2.print(nvs_logger.LAST_SETTING);
+    } while ( u8g2.nextPage() );
+
 
 }
 //主循环
 void loop(){
+    //主循环中不断查询按键状态
+    button.tick();
+    //主循环中检查时间戳
+    TimeCountdownTick();
+
     if(START_INTERFACE == interface_status){
-        
+        //显示重要数据，计划是5个，ODO_wh ODO_HS TRIP_WH TRIP_HS MODE
+        // //显示部分改为显示累积数值
+        // u8g2.begin();
+        // u8g2.firstPage();
+        // do {
+        //     u8g2.setFont(u8g2_font_6x10_tf);
+        //     u8g2.setCursor(3, 13);
+        //     u8g2.print("ODO:");u8g2.print((nvs_logger.ODO_Ws)/3600);u8g2.print("WH");
+        //     u8g2.setCursor(3, 23);
+        //     u8g2.print("ODO:");u8g2.print(nvs_logger.ODO_HS/3600);u8g2.print("H");u8g2.print(nvs_logger.ODO_HS%3600);u8g2.print("S");
+        //     u8g2.setCursor(3, 33);
+        //     u8g2.print("TRIP:");u8g2.print((nvs_logger.TRIP_Ws)/3600);u8g2.print("WH");
+        //     u8g2.setCursor(3, 43);
+        //     u8g2.print("TRIP:");u8g2.print(nvs_logger.TRIP_HS);u8g2.print("S");
+        //     u8g2.setCursor(3, 53);
+        //     u8g2.print("LAST_MODE:");u8g2.print(nvs_logger.LAST_MODE);
+        //     u8g2.setCursor(3, 63);
+        //     u8g2.print("LAST_SETTING:");u8g2.print(nvs_logger.LAST_SETTING);
+        // } while ( u8g2.nextPage() );
+
     }
     if(CW_INTERFACE == interface_status){
         
