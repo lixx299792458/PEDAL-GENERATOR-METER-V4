@@ -105,7 +105,7 @@ void ButtonClick(){
             u8g2.firstPage();
             do {
                 u8g2.setFont(u8g2_font_inb24_mf);
-                u8g2.setCursor(3, 31);
+                u8g2.setCursor(3, 28);
                 u8g2.print("CW:");
                 u8g2.setCursor(3, 60);
                 u8g2.print(power_set);u8g2.print("W");
@@ -253,6 +253,8 @@ void setup(){
 	//旋转编码器初始化部分
 	encoder.attachHalfQuad(DT,CLK);
 	encoder.setCount(0);
+    //使用硬件频率计
+	attachInterrupt(35,frequency_meter,FALLING);
     //取出永久存储的设置
     preferences.begin("nvs-log", false);
     preferences.getBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
@@ -282,6 +284,7 @@ void setup(){
         u8g2.setCursor(3, 63);
         u8g2.print("LAST_SETTING:");u8g2.print(nvs_logger.LAST_SETTING);
     } while ( u8g2.nextPage() );
+
 
     //每次开机检查,检查本次开机的时间，是不是和上次开机的时间，是同一天，如果不是。
     //将trip信息写入日志，并将永久记录中的trip信息都清零
