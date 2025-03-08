@@ -27,6 +27,9 @@ unsigned long inerface_status_time_stamp = 0;
 #define DT 36 // DT ENCODER 
 ESP32Encoder encoder;
 
+//modbus主机部分
+ModbusMaster node;
+
 //状态助记符和状态机参数
 #define START_INTERFACE 0
 #define CW_INTERFACE 1
@@ -48,12 +51,9 @@ struct logtype {
     uint32_t TRIP_HS;
     uint32_t LAST_MODE;
     uint32_t LAST_SETTING;
+    uint32_t DAY;
 };
-logtype nvs_logger = {0,0,0,0,1,200};
-// nvs_logger.cumulative_Ws = nvs_logger.cumulative_Ws + output_power;
-// nvs_logger.cumulative_Seconds ++;
-// preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
-
+logtype nvs_logger = {0,0,0,0,1,200,1};
 
 //屏幕相关定义
 //U8G2_SSD1306_128X64_NONAME_1_4W_SW_SPI u8g2(U8G2_R0, /* clock=*/ 13, /* data=*/ 11, /* cs=*/ 10, /* dc=*/ 9, /* reset=*/ 8);
@@ -67,26 +67,29 @@ uint16_t power_set = 200;
 uint16_t voltage_set = 2480;
 
 // //所有的运行参数一律放入一个结构体，方便管理
-// struct datatype {
-//     uint16_t output_power = 0;
-//     uint16_t cadence = 0;
-//     uint16_t heart_rate = 0;
-//     uint16_t trip_time = 0;
+struct datatype {
+    uint16_t output_power;
+    uint16_t cadence;
+    uint16_t heart_rate;
+    uint16_t trip_time;
 
-//     uint16_t max_output_power = 0;
-//     uint16_t max_cadence = 0;
-//     uint16_t max_heart_rate = 0;
+    uint16_t max_output_power;
+    uint16_t max_cadence;
+    uint16_t max_heart_rate;
 
-//     uint16_t odo_time = 0;
-//     uint16_t odo_wh  = 0;
-//     uint16_t running_mode = 0;
-//     uint16_t running_setting = 0;
+    uint16_t odo_time;
+    uint16_t odo_wh;
+    uint16_t running_mode;
+    uint16_t running_setting;
 
-//     uint16_t voltage_in = 0;
-//     uint16_t voltage_out = 0;
-//     uint16_t current_out = 0;
-// };
-// datatype data_details = {0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+    uint16_t voltage_in;
+    uint16_t voltage_out;
+    uint16_t current_out;
+};
+datatype data_details = {0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+
+unsigned long currentadjust_time_stamp = 0;
+unsigned long outputpower_updatetime_stamp = 0;
 //每次按键按下都会出发该函数，进而切换状态
 //在每次切换状态时，还有一些工作要做
 //虽然这种状态机的方式还是很复杂，但是起码把运行和状态切换进行了解耦
@@ -214,9 +217,34 @@ void TimeCountdownTick(){
     }
 }
 
+unsigned long cadence_time_stamp = 0;
+unsigned long cadence_lastpulse_timestamp = 0;
+uint16_t cadence_buffer[12];
+//频率计部分
+void frequency_meter()
+{
+	unsigned long cadence_sum = 0;
+	//刷新该时间，可以使得转速在长时间不中断的情况下清零
+	cadence_time_stamp = millis();
+	//波形必须得滤波，要不然变化太快
+	for (int i=0;i<11;i++){
+		cadence_buffer[i] = cadence_buffer[i+1];
+	}
+    //最好进行一个异常数检测，软件的那种
+	//直接计算得到
+	cadence_buffer[11] = int(16000000.0/(micros()-cadence_lastpulse_timestamp));
+	cadence_lastpulse_timestamp = micros();
+	//然后对踏频求平均
+	for (int i=0;i<12;i++){
+		cadence_sum = cadence_buffer[i] + cadence_sum;
+	}
+	data_details.cadence = int(cadence_sum/12);
+}
 void setup(){
     Serial.begin(115200);
-
+	//MODBUS主机部分
+	Serial2.begin(115200);
+	node.begin(1, Serial2);
     //初始化开机倒计时
     inerface_status_time_stamp = millis();
     //初始化按键设置
@@ -228,8 +256,14 @@ void setup(){
     //取出永久存储的设置
     preferences.begin("nvs-log", false);
     preferences.getBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
+    data_details.trip_time = nvs_logger.TRIP_HS;
     last_interface_status = nvs_logger.LAST_MODE;
-
+    if(1 == last_interface_status){
+        power_set = nvs_logger.LAST_SETTING;
+    }
+    if(2 == last_interface_status){
+        voltage_set = nvs_logger.LAST_SETTING;
+    }
     //显示部分改为显示累积数值
     u8g2.begin();
     u8g2.firstPage();
@@ -249,6 +283,8 @@ void setup(){
         u8g2.print("LAST_SETTING:");u8g2.print(nvs_logger.LAST_SETTING);
     } while ( u8g2.nextPage() );
 
+    //每次开机检查,检查本次开机的时间，是不是和上次开机的时间，是同一天，如果不是。
+    //将trip信息写入日志，并将永久记录中的trip信息都清零
 
 }
 //主循环
@@ -281,17 +317,186 @@ void loop(){
 
     }
     if(CW_INTERFACE == interface_status){
-        //显示和更新屏幕
+        // 显示和更新屏幕，为了直观显示两种不同的工况，是否可以用阴阳两种颜色
+		u8g2.firstPage();
+		do {
+			u8g2.drawHLine(2,1,128);u8g2.drawHLine(2,32,128);u8g2.drawHLine(2,63,128);
+			u8g2.drawVLine(2,1,64);u8g2.drawVLine(65,1,64);u8g2.drawVLine(127,1,64);
 
-        //驱动电源板，不断改变其设置
+			u8g2.setFont(u8g2_font_VCR_OSD_tu);
+            u8g2.setCursor(6, 24);
+            u8g2.print(data_details.output_power);u8g2.print("W");
 
-        //更新永久保存区设定数据
+			u8g2.setFont(u8g2_font_VCR_OSD_tu);
+            if(0 == data_details.cadence){
+                u8g2.setCursor(69, 24);
+                u8g2.print("---");
+            }
+            else{
+                u8g2.setCursor(69, 24);
+                u8g2.print(data_details.cadence);u8g2.print("R");
+            }
 
-        //更新详细参数内容
+            u8g2.setFont(u8g2_font_VCR_OSD_tu);
+            u8g2.setCursor(6, 55);
+            u8g2.print(data_details.heart_rate);u8g2.print("B");
 
+            u8g2.setFont(u8g2_font_VCR_OSD_tu);
+            u8g2.setCursor(67, 55);
+            u8g2.print(data_details.trip_time);u8g2.print("S");
+
+		} while ( u8g2.nextPage() );        
+        //驱动电源板，不断改变其设置，改成5S更新一次，且每次更新完，读取数据之前，需要延时，否则会卡住
+		unsigned long currentadjust_time_gap = millis() - currentadjust_time_stamp;
+		if(currentadjust_time_gap > 5000){
+			// MODBUS更新部分，要不断的更新，因为输出电压在不断变化
+			uint16_t current_set = 0;
+			//读取输出电压
+			uint8_t result = node.readHoldingRegisters(2, 1);
+			if (result == node.ku8MBSuccess)
+			{
+				//直接计算设定功率除以输出电压
+				current_set = power_set/(node.getResponseBuffer(0)/100.0)*100;
+				//大于20A则等于20A
+				current_set = MIN(current_set,2000);
+			}
+			//回写设定电流和限制电压
+			node.setTransmitBuffer(0, 1590);
+			node.setTransmitBuffer(1, current_set);
+			result = node.writeMultipleRegisters(0, 2);
+			// //稍作延时，否则读写DC-DC的频率太高了,
+			delay(50);
+			currentadjust_time_stamp = millis();
+		}
+        //更新1S频率的任务，检查最大值，更新永久累计和设定
+    	unsigned long outputpower_updatetime_gap = millis() - outputpower_updatetime_stamp;
+    	if(outputpower_updatetime_gap > 1000){
+    		uint8_t result = node.readHoldingRegisters(4, 1);
+    		if (result == node.ku8MBSuccess)
+    		{
+    			data_details.output_power = int(node.getResponseBuffer(0)/10);
+                //功率大于100W，一切开始累计
+                if(data_details.output_power > 100)
+                {
+                    data_details.trip_time ++;
+                    //更新永久数据并及时写入
+                    nvs_logger.ODO_Ws = nvs_logger.ODO_Ws + data_details.output_power;
+                    nvs_logger.ODO_HS ++;
+                    nvs_logger.TRIP_Ws = nvs_logger.TRIP_Ws + data_details.output_power;
+                    nvs_logger.TRIP_HS ++;
+                    nvs_logger.LAST_MODE = 1;
+                    nvs_logger.LAST_SETTING = power_set;
+                    preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
+                }
+    		}
+            //更新最大值
+            if(data_details.output_power > data_details.max_output_power)
+            {
+                data_details.max_output_power = data_details.output_power;
+            }
+            if(data_details.cadence > data_details.max_cadence)
+            {
+                data_details.max_cadence = data_details.cadence;
+            }
+            if(data_details.heart_rate > data_details.max_heart_rate)
+            {
+                data_details.max_heart_rate = data_details.heart_rate;
+            }
+            //复位倒计时
+            outputpower_updatetime_stamp = millis();
+    	}
+        //长时间没有脉冲的时候，显示为---
+        unsigned long cadence_gap = millis() - cadence_time_stamp;
+        if(cadence_gap > 5000){
+            data_details.cadence = 0;
+        }
     }
     if(CV_INTERFACE == interface_status){
-        
+        // 显示和更新屏幕，为了直观显示两种不同的工况，是否可以用阴阳两种颜色
+		u8g2.firstPage();
+		do {
+            u8g2.setFontMode(1);
+            u8g2.setDrawColor(1);
+            u8g2.drawBox(1,1,128,64);
+            u8g2.setDrawColor(2);
+
+			u8g2.drawHLine(2,1,128);u8g2.drawHLine(2,32,128);u8g2.drawHLine(2,63,128);
+			u8g2.drawVLine(2,1,64);u8g2.drawVLine(65,1,64);u8g2.drawVLine(127,1,64);
+
+			u8g2.setFont(u8g2_font_VCR_OSD_tu);
+            u8g2.setCursor(6, 24);
+            u8g2.print(data_details.output_power);u8g2.print("W");
+
+			u8g2.setFont(u8g2_font_VCR_OSD_tu);
+            if(0 == data_details.cadence){
+                u8g2.setCursor(69, 24);
+                u8g2.print("---");
+            }
+            else{
+                u8g2.setCursor(69, 24);
+                u8g2.print(data_details.cadence);u8g2.print("R");
+            }
+
+            u8g2.setFont(u8g2_font_VCR_OSD_tu);
+            u8g2.setCursor(6, 55);
+            u8g2.print(data_details.heart_rate);u8g2.print("B");
+
+            u8g2.setFont(u8g2_font_VCR_OSD_tu);
+            u8g2.setCursor(67, 55);
+            u8g2.print(data_details.trip_time);u8g2.print("S");
+
+		} while ( u8g2.nextPage() );        
+        //驱动电源板，不断改变其设置，改成5S更新一次，且每次更新完，读取数据之前，需要延时，否则会卡住
+		unsigned long currentadjust_time_gap = millis() - currentadjust_time_stamp;
+		if(currentadjust_time_gap > 5000){
+			node.setTransmitBuffer(0, voltage_set);
+			node.setTransmitBuffer(1, 2000);
+			uint8_t result = node.writeMultipleRegisters(0, 2);
+			delay(50);
+			currentadjust_time_stamp = millis();
+		}
+        //更新1S频率的任务，检查最大值，更新永久累计和设定
+    	unsigned long outputpower_updatetime_gap = millis() - outputpower_updatetime_stamp;
+    	if(outputpower_updatetime_gap > 1000){
+    		uint8_t result = node.readHoldingRegisters(4, 1);
+    		if (result == node.ku8MBSuccess)
+    		{
+    			data_details.output_power = int(node.getResponseBuffer(0)/10);
+                //功率大于100W，一切开始累计
+                if(data_details.output_power > 100)
+                {
+                    data_details.trip_time ++;
+                    //更新永久数据并及时写入
+                    nvs_logger.ODO_Ws = nvs_logger.ODO_Ws + data_details.output_power;
+                    nvs_logger.ODO_HS ++;
+                    nvs_logger.TRIP_Ws = nvs_logger.TRIP_Ws + data_details.output_power;
+                    nvs_logger.TRIP_HS ++;
+                    nvs_logger.LAST_MODE = 2;
+                    nvs_logger.LAST_SETTING = voltage_set;
+                    preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
+                }
+    		}
+            //更新最大值
+            if(data_details.output_power > data_details.max_output_power)
+            {
+                data_details.max_output_power = data_details.output_power;
+            }
+            if(data_details.cadence > data_details.max_cadence)
+            {
+                data_details.max_cadence = data_details.cadence;
+            }
+            if(data_details.heart_rate > data_details.max_heart_rate)
+            {
+                data_details.max_heart_rate = data_details.heart_rate;
+            }
+            //复位倒计时
+            outputpower_updatetime_stamp = millis();
+    	}
+        //长时间没有脉冲的时候，显示为---
+        unsigned long cadence_gap = millis() - cadence_time_stamp;
+        if(cadence_gap > 5000){
+            data_details.cadence = 0;
+        }
     }
     if(WSET_INTERFACE == interface_status){
         int64_t encoderpos = encoder.getCount();
