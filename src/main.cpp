@@ -8,7 +8,6 @@
 #include <SPI.h>
 #include <ModbusMaster.h>
 #include <ModbusRTU.h>
-#include "BLEDevice.h"
 #include <Preferences.h>
 #include <NimBLEDevice.h>
 
@@ -95,47 +94,33 @@ unsigned long outputpower_updatetime_stamp = 0;
 static const NimBLEAdvertisedDevice* advDevice;
 static bool                          doConnect  = false;
 static uint32_t                      scanTimeMs = 5000; /** scan time in milliseconds, 0 = scan forever */
+static BLEUUID service_HR_UUID(BLEUUID((uint16_t)0x180D));
+static BLEUUID char_HR_UUID(BLEUUID((uint16_t)0x2A37));
 
 class ClientCallbacks : public NimBLEClientCallbacks {
-    void onConnect(NimBLEClient* pClient) override { Serial.printf("Connected\n"); }
+    void onConnect(NimBLEClient* pClient) override {
+        #ifdef DEBUG
+        Serial.printf("Connected\n");
+        #endif
+    }
 
     void onDisconnect(NimBLEClient* pClient, int reason) override {
+        #ifdef DEBUG
         Serial.printf("%s Disconnected, reason = %d - Starting scan\n", pClient->getPeerAddress().toString().c_str(), reason);
+        #endif
         NimBLEDevice::getScan()->start(scanTimeMs, false, true);
-    }
-
-    /********************* Security handled here *********************/
-    void onPassKeyEntry(NimBLEConnInfo& connInfo) override {
-        Serial.printf("Server Passkey Entry\n");
-        /**
-         * This should prompt the user to enter the passkey displayed
-         * on the peer device.
-         */
-        NimBLEDevice::injectPassKey(connInfo, 123456);
-    }
-
-    void onConfirmPasskey(NimBLEConnInfo& connInfo, uint32_t pass_key) override {
-        Serial.printf("The passkey YES/NO number: %" PRIu32 "\n", pass_key);
-        /** Inject false if passkeys don't match. */
-        NimBLEDevice::injectConfirmPasskey(connInfo, true);
-    }
-
-    /** Pairing process complete, we can check the results in connInfo */
-    void onAuthenticationComplete(NimBLEConnInfo& connInfo) override {
-        if (!connInfo.isEncrypted()) {
-            Serial.printf("Encrypt connection failed - disconnecting\n");
-            /** Find the client with the connection handle provided in connInfo */
-            NimBLEDevice::getClientByHandle(connInfo.getConnHandle())->disconnect();
-            return;
-        }
     }
 } clientCallbacks;
 /** Define a class to handle the callbacks when scan events are received */
 class ScanCallbacks : public NimBLEScanCallbacks {
     void onResult(const NimBLEAdvertisedDevice* advertisedDevice) override {
+        #ifdef DEBUG
         Serial.printf("Advertised Device found: %s\n", advertisedDevice->toString().c_str());
-        if (advertisedDevice->isAdvertisingService(NimBLEUUID("DEAD"))) {
+        #endif
+        if (advertisedDevice->isAdvertisingService(NimBLEUUID(service_HR_UUID))) {
+            #ifdef DEBUG
             Serial.printf("Found Our Service\n");
+            #endif
             /** stop scan before connecting */
             NimBLEDevice::getScan()->stop();
             /** Save the device reference in a global for the client to use*/
@@ -147,19 +132,27 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 
     /** Callback to process the results of the completed scan or restart it */
     void onScanEnd(const NimBLEScanResults& results, int reason) override {
+        #ifdef DEBUG
         Serial.printf("Scan Ended, reason: %d, device count: %d; Restarting scan\n", reason, results.getCount());
+        #endif
         NimBLEDevice::getScan()->start(scanTimeMs, false, true);
     }
 } scanCallbacks;
 /** Notification / Indication receiving handler callback */
 void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+
+    data_details.heart_rate = pData[1];
     std::string str  = (isNotify == true) ? "Notification" : "Indication";
     str             += " from ";
     str             += pRemoteCharacteristic->getClient()->getPeerAddress().toString();
     str             += ": Service = " + pRemoteCharacteristic->getRemoteService()->getUUID().toString();
     str             += ", Characteristic = " + pRemoteCharacteristic->getUUID().toString();
-    str             += ", Value = " + std::string((char*)pData, length);
+    // str             += ", Value = " + std::string((char*)pData, length);
+    str             += ", Value = ";
+    #ifdef DEBUG
     Serial.printf("%s\n", str.c_str());
+    Serial.println(data_details.heart_rate);
+    #endif
 }
 
 /** Handles the provisioning of clients and connects / interfaces with the server */
@@ -176,15 +169,15 @@ bool connectToServer() {
         pClient = NimBLEDevice::getClientByPeerAddress(advDevice->getAddress());
         if (pClient) {
             if (!pClient->connect(advDevice, false)) {
+                #ifdef DEBUG
                 Serial.printf("Reconnect failed\n");
+                #endif
                 return false;
             }
+            #ifdef DEBUG
             Serial.printf("Reconnected client\n");
+            #endif
         } else {
-            /**
-             *  We don't already have a client that knows this device,
-             *  check for a client that is disconnected that we can use.
-             */
             pClient = NimBLEDevice::getDisconnectedClient();
         }
     }
@@ -192,14 +185,16 @@ bool connectToServer() {
     /** No client to reuse? Create a new one. */
     if (!pClient) {
         if (NimBLEDevice::getCreatedClientCount() >= NIMBLE_MAX_CONNECTIONS) {
+            #ifdef DEBUG
             Serial.printf("Max clients reached - no more connections available\n");
+            #endif
             return false;
         }
 
         pClient = NimBLEDevice::createClient();
-
+        #ifdef DEBUG
         Serial.printf("New client created\n");
-
+        #endif
         pClient->setClientCallbacks(&clientCallbacks, false);
         /**
          *  Set initial connection parameters:
@@ -215,110 +210,50 @@ bool connectToServer() {
         if (!pClient->connect(advDevice)) {
             /** Created a client but failed to connect, don't need to keep it as it has no data */
             NimBLEDevice::deleteClient(pClient);
+            #ifdef DEBUG
             Serial.printf("Failed to connect, deleted client\n");
+            #endif
             return false;
         }
     }
 
     if (!pClient->isConnected()) {
         if (!pClient->connect(advDevice)) {
+            #ifdef DEBUG
             Serial.printf("Failed to connect\n");
+            #endif
             return false;
         }
     }
-
+    #ifdef DEBUG
     Serial.printf("Connected to: %s RSSI: %d\n", pClient->getPeerAddress().toString().c_str(), pClient->getRssi());
-
+    #endif
     /** Now we can read/write/subscribe the characteristics of the services we are interested in */
     NimBLERemoteService*        pSvc = nullptr;
     NimBLERemoteCharacteristic* pChr = nullptr;
     NimBLERemoteDescriptor*     pDsc = nullptr;
 
-    pSvc = pClient->getService("DEAD");
+    pSvc = pClient->getService(service_HR_UUID);
     if (pSvc) {
-        pChr = pSvc->getCharacteristic("BEEF");
+        pChr = pSvc->getCharacteristic(char_HR_UUID);
     }
 
     if (pChr) {
-        if (pChr->canRead()) {
-            Serial.printf("%s Value: %s\n", pChr->getUUID().toString().c_str(), pChr->readValue().c_str());
-        }
-
-        if (pChr->canWrite()) {
-            if (pChr->writeValue("Tasty")) {
-                Serial.printf("Wrote new value to: %s\n", pChr->getUUID().toString().c_str());
-            } else {
-                pClient->disconnect();
-                return false;
-            }
-
-            if (pChr->canRead()) {
-                Serial.printf("The value of: %s is now: %s\n", pChr->getUUID().toString().c_str(), pChr->readValue().c_str());
-            }
-        }
-
         if (pChr->canNotify()) {
             if (!pChr->subscribe(true, notifyCB)) {
                 pClient->disconnect();
                 return false;
             }
-        } else if (pChr->canIndicate()) {
-            /** Send false as first argument to subscribe to indications instead of notifications */
-            if (!pChr->subscribe(false, notifyCB)) {
-                pClient->disconnect();
-                return false;
-            }
         }
     } else {
-        Serial.printf("DEAD service not found.\n");
+        #ifdef DEBUG
+        Serial.printf("HEARRATE service not found.\n");
+        #endif
     }
 
-    pSvc = pClient->getService("BAAD");
-    if (pSvc) {
-        pChr = pSvc->getCharacteristic("F00D");
-        if (pChr) {
-            if (pChr->canRead()) {
-                Serial.printf("%s Value: %s\n", pChr->getUUID().toString().c_str(), pChr->readValue().c_str());
-            }
-
-            pDsc = pChr->getDescriptor(NimBLEUUID("C01D"));
-            if (pDsc) {
-                Serial.printf("Descriptor: %s  Value: %s\n", pDsc->getUUID().toString().c_str(), pDsc->readValue().c_str());
-            }
-
-            if (pChr->canWrite()) {
-                if (pChr->writeValue("No tip!")) {
-                    Serial.printf("Wrote new value to: %s\n", pChr->getUUID().toString().c_str());
-                } else {
-                    pClient->disconnect();
-                    return false;
-                }
-
-                if (pChr->canRead()) {
-                    Serial.printf("The value of: %s is now: %s\n",
-                                  pChr->getUUID().toString().c_str(),
-                                  pChr->readValue().c_str());
-                }
-            }
-
-            if (pChr->canNotify()) {
-                if (!pChr->subscribe(true, notifyCB)) {
-                    pClient->disconnect();
-                    return false;
-                }
-            } else if (pChr->canIndicate()) {
-                /** Send false as first argument to subscribe to indications instead of notifications */
-                if (!pChr->subscribe(false, notifyCB)) {
-                    pClient->disconnect();
-                    return false;
-                }
-            }
-        }
-    } else {
-        Serial.printf("BAAD service not found.\n");
-    }
-
+    #ifdef DEBUG
     Serial.printf("Done with this device!\n");
+    #endif
     return true;
 }
 
@@ -529,7 +464,9 @@ void setup(){
     pScan->setWindow(100);
     pScan->setActiveScan(true);
     pScan->start(scanTimeMs);
+    #ifdef DEBUG
     Serial.printf("Scanning for peripherals\n");
+    #endif
 
 }
 //主循环
@@ -538,11 +475,14 @@ void loop(){
         doConnect = false;
         /** Found a device we want to connect to, do it now */
         if (connectToServer()) {
+            #ifdef DEBUG
             Serial.printf("Success! we should now be getting notifications, scanning for more!\n");
+            #endif
         } else {
+            #ifdef DEBUG
             Serial.printf("Failed to connect, starting scan\n");
+            #endif
         }
-
         NimBLEDevice::getScan()->start(scanTimeMs, false, true);
     }
 
