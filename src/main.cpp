@@ -1,9 +1,6 @@
 //重构循环结构，状态机驱动
 //开机界面、恒功率待机界面、恒电压待机界面、功率设置界面、电压设置界面、能耗统计界面
 
-
-
-
 #include "OneButton.h"
 #include <ESP32Encoder.h> 
 #include <Arduino.h>
@@ -13,8 +10,11 @@
 #include <ModbusRTU.h>
 #include "BLEDevice.h"
 #include <Preferences.h>
+#include <NimBLEDevice.h>
 
+//调试开关打开，则MODBUS从机失效，串口1会输出一些调试信息
 #define DEBUG
+//设置界面的等待时间
 #define TIME_LIMIT 5000
 
 //定义按键和按键指示灯，这个按键用于切换工作状态
@@ -90,6 +90,238 @@ datatype data_details = {0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 
 unsigned long currentadjust_time_stamp = 0;
 unsigned long outputpower_updatetime_stamp = 0;
+
+//心率部分类的重载
+static const NimBLEAdvertisedDevice* advDevice;
+static bool                          doConnect  = false;
+static uint32_t                      scanTimeMs = 5000; /** scan time in milliseconds, 0 = scan forever */
+
+class ClientCallbacks : public NimBLEClientCallbacks {
+    void onConnect(NimBLEClient* pClient) override { Serial.printf("Connected\n"); }
+
+    void onDisconnect(NimBLEClient* pClient, int reason) override {
+        Serial.printf("%s Disconnected, reason = %d - Starting scan\n", pClient->getPeerAddress().toString().c_str(), reason);
+        NimBLEDevice::getScan()->start(scanTimeMs, false, true);
+    }
+
+    /********************* Security handled here *********************/
+    void onPassKeyEntry(NimBLEConnInfo& connInfo) override {
+        Serial.printf("Server Passkey Entry\n");
+        /**
+         * This should prompt the user to enter the passkey displayed
+         * on the peer device.
+         */
+        NimBLEDevice::injectPassKey(connInfo, 123456);
+    }
+
+    void onConfirmPasskey(NimBLEConnInfo& connInfo, uint32_t pass_key) override {
+        Serial.printf("The passkey YES/NO number: %" PRIu32 "\n", pass_key);
+        /** Inject false if passkeys don't match. */
+        NimBLEDevice::injectConfirmPasskey(connInfo, true);
+    }
+
+    /** Pairing process complete, we can check the results in connInfo */
+    void onAuthenticationComplete(NimBLEConnInfo& connInfo) override {
+        if (!connInfo.isEncrypted()) {
+            Serial.printf("Encrypt connection failed - disconnecting\n");
+            /** Find the client with the connection handle provided in connInfo */
+            NimBLEDevice::getClientByHandle(connInfo.getConnHandle())->disconnect();
+            return;
+        }
+    }
+} clientCallbacks;
+/** Define a class to handle the callbacks when scan events are received */
+class ScanCallbacks : public NimBLEScanCallbacks {
+    void onResult(const NimBLEAdvertisedDevice* advertisedDevice) override {
+        Serial.printf("Advertised Device found: %s\n", advertisedDevice->toString().c_str());
+        if (advertisedDevice->isAdvertisingService(NimBLEUUID("DEAD"))) {
+            Serial.printf("Found Our Service\n");
+            /** stop scan before connecting */
+            NimBLEDevice::getScan()->stop();
+            /** Save the device reference in a global for the client to use*/
+            advDevice = advertisedDevice;
+            /** Ready to connect now */
+            doConnect = true;
+        }
+    }
+
+    /** Callback to process the results of the completed scan or restart it */
+    void onScanEnd(const NimBLEScanResults& results, int reason) override {
+        Serial.printf("Scan Ended, reason: %d, device count: %d; Restarting scan\n", reason, results.getCount());
+        NimBLEDevice::getScan()->start(scanTimeMs, false, true);
+    }
+} scanCallbacks;
+/** Notification / Indication receiving handler callback */
+void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+    std::string str  = (isNotify == true) ? "Notification" : "Indication";
+    str             += " from ";
+    str             += pRemoteCharacteristic->getClient()->getPeerAddress().toString();
+    str             += ": Service = " + pRemoteCharacteristic->getRemoteService()->getUUID().toString();
+    str             += ", Characteristic = " + pRemoteCharacteristic->getUUID().toString();
+    str             += ", Value = " + std::string((char*)pData, length);
+    Serial.printf("%s\n", str.c_str());
+}
+
+/** Handles the provisioning of clients and connects / interfaces with the server */
+bool connectToServer() {
+    NimBLEClient* pClient = nullptr;
+
+    /** Check if we have a client we should reuse first **/
+    if (NimBLEDevice::getCreatedClientCount()) {
+        /**
+         *  Special case when we already know this device, we send false as the
+         *  second argument in connect() to prevent refreshing the service database.
+         *  This saves considerable time and power.
+         */
+        pClient = NimBLEDevice::getClientByPeerAddress(advDevice->getAddress());
+        if (pClient) {
+            if (!pClient->connect(advDevice, false)) {
+                Serial.printf("Reconnect failed\n");
+                return false;
+            }
+            Serial.printf("Reconnected client\n");
+        } else {
+            /**
+             *  We don't already have a client that knows this device,
+             *  check for a client that is disconnected that we can use.
+             */
+            pClient = NimBLEDevice::getDisconnectedClient();
+        }
+    }
+
+    /** No client to reuse? Create a new one. */
+    if (!pClient) {
+        if (NimBLEDevice::getCreatedClientCount() >= NIMBLE_MAX_CONNECTIONS) {
+            Serial.printf("Max clients reached - no more connections available\n");
+            return false;
+        }
+
+        pClient = NimBLEDevice::createClient();
+
+        Serial.printf("New client created\n");
+
+        pClient->setClientCallbacks(&clientCallbacks, false);
+        /**
+         *  Set initial connection parameters:
+         *  These settings are safe for 3 clients to connect reliably, can go faster if you have less
+         *  connections. Timeout should be a multiple of the interval, minimum is 100ms.
+         *  Min interval: 12 * 1.25ms = 15, Max interval: 12 * 1.25ms = 15, 0 latency, 150 * 10ms = 1500ms timeout
+         */
+        pClient->setConnectionParams(12, 12, 0, 150);
+
+        /** Set how long we are willing to wait for the connection to complete (milliseconds), default is 30000. */
+        pClient->setConnectTimeout(5 * 1000);
+
+        if (!pClient->connect(advDevice)) {
+            /** Created a client but failed to connect, don't need to keep it as it has no data */
+            NimBLEDevice::deleteClient(pClient);
+            Serial.printf("Failed to connect, deleted client\n");
+            return false;
+        }
+    }
+
+    if (!pClient->isConnected()) {
+        if (!pClient->connect(advDevice)) {
+            Serial.printf("Failed to connect\n");
+            return false;
+        }
+    }
+
+    Serial.printf("Connected to: %s RSSI: %d\n", pClient->getPeerAddress().toString().c_str(), pClient->getRssi());
+
+    /** Now we can read/write/subscribe the characteristics of the services we are interested in */
+    NimBLERemoteService*        pSvc = nullptr;
+    NimBLERemoteCharacteristic* pChr = nullptr;
+    NimBLERemoteDescriptor*     pDsc = nullptr;
+
+    pSvc = pClient->getService("DEAD");
+    if (pSvc) {
+        pChr = pSvc->getCharacteristic("BEEF");
+    }
+
+    if (pChr) {
+        if (pChr->canRead()) {
+            Serial.printf("%s Value: %s\n", pChr->getUUID().toString().c_str(), pChr->readValue().c_str());
+        }
+
+        if (pChr->canWrite()) {
+            if (pChr->writeValue("Tasty")) {
+                Serial.printf("Wrote new value to: %s\n", pChr->getUUID().toString().c_str());
+            } else {
+                pClient->disconnect();
+                return false;
+            }
+
+            if (pChr->canRead()) {
+                Serial.printf("The value of: %s is now: %s\n", pChr->getUUID().toString().c_str(), pChr->readValue().c_str());
+            }
+        }
+
+        if (pChr->canNotify()) {
+            if (!pChr->subscribe(true, notifyCB)) {
+                pClient->disconnect();
+                return false;
+            }
+        } else if (pChr->canIndicate()) {
+            /** Send false as first argument to subscribe to indications instead of notifications */
+            if (!pChr->subscribe(false, notifyCB)) {
+                pClient->disconnect();
+                return false;
+            }
+        }
+    } else {
+        Serial.printf("DEAD service not found.\n");
+    }
+
+    pSvc = pClient->getService("BAAD");
+    if (pSvc) {
+        pChr = pSvc->getCharacteristic("F00D");
+        if (pChr) {
+            if (pChr->canRead()) {
+                Serial.printf("%s Value: %s\n", pChr->getUUID().toString().c_str(), pChr->readValue().c_str());
+            }
+
+            pDsc = pChr->getDescriptor(NimBLEUUID("C01D"));
+            if (pDsc) {
+                Serial.printf("Descriptor: %s  Value: %s\n", pDsc->getUUID().toString().c_str(), pDsc->readValue().c_str());
+            }
+
+            if (pChr->canWrite()) {
+                if (pChr->writeValue("No tip!")) {
+                    Serial.printf("Wrote new value to: %s\n", pChr->getUUID().toString().c_str());
+                } else {
+                    pClient->disconnect();
+                    return false;
+                }
+
+                if (pChr->canRead()) {
+                    Serial.printf("The value of: %s is now: %s\n",
+                                  pChr->getUUID().toString().c_str(),
+                                  pChr->readValue().c_str());
+                }
+            }
+
+            if (pChr->canNotify()) {
+                if (!pChr->subscribe(true, notifyCB)) {
+                    pClient->disconnect();
+                    return false;
+                }
+            } else if (pChr->canIndicate()) {
+                /** Send false as first argument to subscribe to indications instead of notifications */
+                if (!pChr->subscribe(false, notifyCB)) {
+                    pClient->disconnect();
+                    return false;
+                }
+            }
+        }
+    } else {
+        Serial.printf("BAAD service not found.\n");
+    }
+
+    Serial.printf("Done with this device!\n");
+    return true;
+}
+
 //每次按键按下都会出发该函数，进而切换状态
 //在每次切换状态时，还有一些工作要做
 //虽然这种状态机的方式还是很复杂，但是起码把运行和状态切换进行了解耦
@@ -285,13 +517,35 @@ void setup(){
         u8g2.print("LAST_SETTING:");u8g2.print(nvs_logger.LAST_SETTING);
     } while ( u8g2.nextPage() );
 
-
     //每次开机检查,检查本次开机的时间，是不是和上次开机的时间，是同一天，如果不是。
     //将trip信息写入日志，并将永久记录中的trip信息都清零
+
+    NimBLEDevice::init("NimBLE-Client");
+    NimBLEDevice::setSecurityAuth(/*BLE_SM_PAIR_AUTHREQ_BOND | BLE_SM_PAIR_AUTHREQ_MITM |*/ BLE_SM_PAIR_AUTHREQ_SC);
+    NimBLEDevice::setPower(3); /** 3dbm */
+    NimBLEScan* pScan = NimBLEDevice::getScan();
+    pScan->setScanCallbacks(&scanCallbacks, false);
+    pScan->setInterval(100);
+    pScan->setWindow(100);
+    pScan->setActiveScan(true);
+    pScan->start(scanTimeMs);
+    Serial.printf("Scanning for peripherals\n");
 
 }
 //主循环
 void loop(){
+    if (doConnect) {
+        doConnect = false;
+        /** Found a device we want to connect to, do it now */
+        if (connectToServer()) {
+            Serial.printf("Success! we should now be getting notifications, scanning for more!\n");
+        } else {
+            Serial.printf("Failed to connect, starting scan\n");
+        }
+
+        NimBLEDevice::getScan()->start(scanTimeMs, false, true);
+    }
+
     //主循环中不断查询按键状态
     button.tick();
     //主循环中检查时间戳
