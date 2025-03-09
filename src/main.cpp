@@ -539,7 +539,7 @@ void setup(){
         return;
     }
     // appendFile(LittleFS, "/log.txt","hello again");
-    readFile(LittleFS, "/log.txt");
+    // readFile(LittleFS, "/log.txt");
 
     //初始化开机倒计时
     inerface_status_time_stamp = millis();
@@ -612,12 +612,12 @@ void setup(){
     }
 
     //写入测试内容
-    // appendFile(LittleFS, "/log.txt", "2025-03-09:100wh\r");
-    // appendFile(LittleFS, "/log.txt", "2025-03-10:104wh\r");
-    // appendFile(LittleFS, "/log.txt", "2025-03-11:105wh\r");
-    // appendFile(LittleFS, "/log.txt", "2025-03-12:106wh\r");
-    // appendFile(LittleFS, "/log.txt", "2025-03-13:107wh\r");
-    // appendFile(LittleFS, "/log.txt", "2025-03-14:108wh\r");
+    // appendFile(LittleFS, "/log.txt", "2020-02-09:100wh\r");
+    // appendFile(LittleFS, "/log.txt", "2020-02-10:104wh\r");
+    // appendFile(LittleFS, "/log.txt", "2020-02-11:105wh\r");
+    // appendFile(LittleFS, "/log.txt", "2020-02-12:106wh\r");
+    // appendFile(LittleFS, "/log.txt", "2020-02-13:107wh\r");
+    // appendFile(LittleFS, "/log.txt", "2020-02-14:108wh\r");
 
     NimBLEDevice::init("NimBLE-Client");
     NimBLEDevice::setSecurityAuth(/*BLE_SM_PAIR_AUTHREQ_BOND | BLE_SM_PAIR_AUTHREQ_MITM |*/ BLE_SM_PAIR_AUTHREQ_SC);
