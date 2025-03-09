@@ -10,11 +10,16 @@
 #include <ModbusRTU.h>
 #include <Preferences.h>
 #include <NimBLEDevice.h>
-
+#include "RTClib.h"
+#include "FS.h"
+#include <LittleFS.h>
 //调试开关打开，则MODBUS从机失效，串口1会输出一些调试信息
-#define DEBUG
+// #define DEBUG
 //设置界面的等待时间
 #define TIME_LIMIT 5000
+//定义存储文件名
+String filename = "log.txt";
+#define FORMAT_LITTLEFS_IF_FAILED true
 
 //定义按键和按键指示灯，这个按键用于切换工作状态
 #define PIN_INPUT 34
@@ -28,6 +33,10 @@ ESP32Encoder encoder;
 
 //modbus主机部分
 ModbusMaster node;
+
+//定义RTC对象
+RTC_DS3231 rtc;
+
 
 //状态助记符和状态机参数
 #define START_INTERFACE 0
@@ -50,9 +59,11 @@ struct logtype {
     uint32_t TRIP_HS;
     uint32_t LAST_MODE;
     uint32_t LAST_SETTING;
-    uint32_t DAY;
+    uint16_t YEAR;
+    uint16_t MONTH;
+    uint16_t DAY;
 };
-logtype nvs_logger = {0,0,0,0,1,200,1};
+logtype nvs_logger = {0,0,0,0,1,200,0,0,0};
 
 //屏幕相关定义
 //U8G2_SSD1306_128X64_NONAME_1_4W_SW_SPI u8g2(U8G2_R0, /* clock=*/ 13, /* data=*/ 11, /* cs=*/ 10, /* dc=*/ 9, /* reset=*/ 8);
@@ -64,7 +75,9 @@ U8G2_SSD1306_128X64_NONAME_1_4W_HW_SPI u8g2(U8G2_R0, 5, 12, 13);
 //一些重要的全局变量
 uint16_t power_set = 200;
 uint16_t voltage_set = 2480;
-
+//记录数量和当前编号
+uint16_t items_count = 0;
+uint16_t items_index = 0;
 // //所有的运行参数一律放入一个结构体，方便管理
 struct datatype {
     uint16_t output_power;
@@ -256,6 +269,60 @@ bool connectToServer() {
     #endif
     return true;
 }
+void appendFile(fs::FS &fs, const char * path, const char * message){
+    #ifdef DEBUG
+    Serial.printf("Appending to file: %s\r\n", path);
+    #endif
+    File file = fs.open(path, FILE_APPEND);
+    if(!file){
+        #ifdef DEBUG
+        Serial.println("- failed to open file for appending");
+        #endif
+        return;
+    }
+    if(file.print(message)){
+        #ifdef DEBUG
+        Serial.println("- message appended");
+        #endif
+    } else {
+        #ifdef DEBUG
+        Serial.println("- append failed");
+        #endif
+    }
+    file.close();
+}
+void readFile(fs::FS &fs, const char * path){
+    items_count = 0;
+    #ifdef DEBUG
+    Serial.printf("Reading file: %s\r\n", path);
+    #endif
+    File file = fs.open(path);
+    if(!file || file.isDirectory()){
+        #ifdef DEBUG
+        Serial.println("- failed to open file for reading");
+        #endif
+        return;
+    }
+    #ifdef DEBUG
+    Serial.println("- read from file:");
+    #endif
+
+    // Serial.println(file.readStringUntil('\r').c_str());
+    // Serial.println(file.readStringUntil('\r').c_str());
+    // Serial.println(file.readStringUntil('\r').c_str());
+    while(file.available()){
+        //每次只读取1个字符
+        // Serial.write(file.read());
+        if('\r' == file.read()){
+            items_count ++;                
+        }
+    }
+    items_index = items_count;
+    #ifdef DEBUG
+    Serial.print("itmes_count:");Serial.println(items_count);
+    #endif
+    file.close();
+}
 
 //每次按键按下都会出发该函数，进而切换状态
 //在每次切换状态时，还有一些工作要做
@@ -312,6 +379,8 @@ void ButtonClick(){
             break;
         case VSET_INTERFACE:
             interface_status = ITEMS_INTERFACE;
+            //先读一次文件，统计有多少条目
+            readFile(LittleFS, "/log.txt");
             //首次进入ITEMS_INTERFACE界面，要执行状态初始化
             u8g2.firstPage();
             do {
@@ -412,6 +481,34 @@ void setup(){
 	//MODBUS主机部分
 	Serial2.begin(115200);
 	node.begin(1, Serial2);
+    //时钟初始化
+    rtc.begin();
+    //设置时间，执行一次即可
+    // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    //显示一次时间
+    DateTime now = rtc.now();
+    #ifdef DEBUG
+    Serial.print(now.year(), DEC);
+    Serial.print('/');
+    Serial.print(now.month(), DEC);
+    Serial.print('/');
+    Serial.print(now.day(), DEC);
+    Serial.print(now.hour(), DEC);
+    Serial.print(':');
+    Serial.print(now.minute(), DEC);
+    Serial.print(':');
+    Serial.print(now.second(), DEC);
+    Serial.println();
+    #endif
+    //尝试加载文件系统
+    // LittleFS.format();
+    if(!LittleFS.begin(FORMAT_LITTLEFS_IF_FAILED)){
+        Serial.println("LittleFS Mount Failed");
+        return;
+    }
+    // appendFile(LittleFS, "/log.txt","hello again");
+    readFile(LittleFS, "/log.txt");
+
     //初始化开机倒计时
     inerface_status_time_stamp = millis();
     //初始化按键设置
@@ -454,6 +551,47 @@ void setup(){
 
     //每次开机检查,检查本次开机的时间，是不是和上次开机的时间，是同一天，如果不是。
     //将trip信息写入日志，并将永久记录中的trip信息都清零
+    //三个信息都一样才行，否则
+    if ((now.year() == nvs_logger.YEAR)&(now.month() == nvs_logger.MONTH)&(now.day() == nvs_logger.DAY)){
+        //今天没过去
+        #ifdef DEBUG
+        Serial.println("today is not past");
+        #endif
+    }
+    else{
+        #ifdef DEBUG
+        Serial.println("today is a new day");
+        #endif
+        //将昨天的单日明细写入某个永久存储
+        //写入年月日和瓦时数明细,写入的时候就得考虑怎么方便读取
+        std::string logstr = "";
+        logstr += std::to_string(now.year());
+        logstr += "-" + std::to_string(now.month());
+        logstr += "-" + std::to_string(now.day());
+        logstr += ":" + std::to_string(nvs_logger.TRIP_Ws/3600) + "wh\r";
+        #ifdef DEBUG
+        Serial.print("log info str is:");
+        Serial.println(logstr.c_str());
+        #endif
+        appendFile(LittleFS, "/log.txt", logstr.c_str());
+        //更新永久设置存储
+        nvs_logger.YEAR = now.year();
+        nvs_logger.MONTH = now.month();
+        nvs_logger.DAY = now.day();
+        nvs_logger.TRIP_HS = 0;
+        nvs_logger.TRIP_Ws = 0;
+        preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
+    }
+
+    //写入测试内容
+    // appendFile(LittleFS, "/log.txt", "2025-03-09:100wh\r");
+    // appendFile(LittleFS, "/log.txt", "2025-03-10:104wh\r");
+    // appendFile(LittleFS, "/log.txt", "2025-03-11:105wh\r");
+    // appendFile(LittleFS, "/log.txt", "2025-03-12:106wh\r");
+    // appendFile(LittleFS, "/log.txt", "2025-03-13:107wh\r");
+    // appendFile(LittleFS, "/log.txt", "2025-03-14:108wh\r");
+
+
 
     NimBLEDevice::init("NimBLE-Client");
     NimBLEDevice::setSecurityAuth(/*BLE_SM_PAIR_AUTHREQ_BOND | BLE_SM_PAIR_AUTHREQ_MITM |*/ BLE_SM_PAIR_AUTHREQ_SC);
@@ -736,7 +874,50 @@ void loop(){
 		}       
     }
     if(ITEMS_INTERFACE == interface_status){
-        
+        //进入该状态机前就进行了一次文件读写，确定了条数，编码器引导指针就可以了。
+        int64_t encoderpos = encoder.getCount();
+        if (0 != encoderpos){
+            //指针是最后一个数据的序号，每个屏幕显示4条。
+            items_index = items_index + encoderpos;
+            items_index = MAX(items_index,4);
+            items_index = MIN(items_index,items_count);
+            //按分节符读取文件，跳过前面，从后往前显示
+            File file = LittleFS.open("/log.txt");
+            //跳过前面的部分
+            uint16_t i = items_index - 4;
+            #ifdef DEBUG
+            Serial.print("item_index:");Serial.println(items_index);
+            #endif
+            while(i--){
+                // Serial.println(file.readStringUntil('\r').c_str());
+                file.readStringUntil('\r');
+            }
+            String itemA = file.readStringUntil('\r');
+            String itemB = file.readStringUntil('\r');
+            String itemC = file.readStringUntil('\r');
+            String itemD = file.readStringUntil('\r');
+            #ifdef DEBUG
+            Serial.println(itemA.c_str());
+            Serial.println(itemB.c_str());
+            Serial.println(itemC.c_str());
+            Serial.println(itemD.c_str());
+            #endif
+            u8g2.firstPage();
+            do {
+                u8g2.setFont(u8g2_font_8x13B_mf);
+                u8g2.setCursor(2, 16);
+                u8g2.print(itemA.c_str());
+                u8g2.setCursor(2, 32);
+                u8g2.print(itemB.c_str());
+                u8g2.setCursor(2, 48);
+                u8g2.print(itemC.c_str());
+                u8g2.setCursor(2, 64);
+                u8g2.print(itemD.c_str());
+            } while ( u8g2.nextPage() );
+            file.close();
+            //每次都清零编码器，省了不少事
+            encoder.setCount(0);
+		}  
     }
 }
 
