@@ -109,6 +109,7 @@ static bool                          doConnect  = false;
 static uint32_t                      scanTimeMs = 5000; /** scan time in milliseconds, 0 = scan forever */
 static BLEUUID service_HR_UUID(BLEUUID((uint16_t)0x180D));
 static BLEUUID char_HR_UUID(BLEUUID((uint16_t)0x2A37));
+unsigned long heart_rate_time_stamp = 0;
 
 class ClientCallbacks : public NimBLEClientCallbacks {
     void onConnect(NimBLEClient* pClient) override {
@@ -155,6 +156,8 @@ class ScanCallbacks : public NimBLEScanCallbacks {
 void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
 
     data_details.heart_rate = pData[1];
+    //刷新该时间，可以使得心率在长时间不中断的情况下清零
+	cadence_time_stamp = millis();
     std::string str  = (isNotify == true) ? "Notification" : "Indication";
     str             += " from ";
     str             += pRemoteCharacteristic->getClient()->getPeerAddress().toString();
@@ -673,8 +676,14 @@ void loop(){
             }
 
             u8g2.setFont(u8g2_font_VCR_OSD_tu);
-            u8g2.setCursor(6, 55);
-            u8g2.print(data_details.heart_rate);u8g2.print("B");
+            if(0 == data_details.heart_rate){
+                u8g2.setCursor(6, 55);
+                u8g2.print("---");
+            }
+            else{
+                u8g2.setCursor(6, 55);
+                u8g2.print(data_details.heart_rate);u8g2.print("B");                
+            }
 
             u8g2.setFont(u8g2_font_VCR_OSD_tu);
             u8g2.setCursor(67, 55);
@@ -746,6 +755,12 @@ void loop(){
         if(cadence_gap > 5000){
             data_details.cadence = 0;
         }
+        unsigned long heart_rate_gap = millis() - heart_rate_time_stamp;
+        if(cadence_gap > 5000){
+            data_details.heart_rate = 0;
+        }
+
+
     }
     if(CV_INTERFACE == interface_status){
         // 显示和更新屏幕，为了直观显示两种不同的工况，是否可以用阴阳两种颜色
@@ -774,8 +789,14 @@ void loop(){
             }
 
             u8g2.setFont(u8g2_font_VCR_OSD_tu);
-            u8g2.setCursor(6, 55);
-            u8g2.print(data_details.heart_rate);u8g2.print("B");
+            if(0 == data_details.heart_rate){
+                u8g2.setCursor(6, 55);
+                u8g2.print("---");
+            }
+            else{
+                u8g2.setCursor(6, 55);
+                u8g2.print(data_details.heart_rate);u8g2.print("B");                
+            }
 
             u8g2.setFont(u8g2_font_VCR_OSD_tu);
             u8g2.setCursor(67, 55);
@@ -832,6 +853,10 @@ void loop(){
         unsigned long cadence_gap = millis() - cadence_time_stamp;
         if(cadence_gap > 5000){
             data_details.cadence = 0;
+        }
+        unsigned long heart_rate_gap = millis() - heart_rate_time_stamp;
+        if(cadence_gap > 5000){
+            data_details.heart_rate = 0;
         }
     }
     if(WSET_INTERFACE == interface_status){
