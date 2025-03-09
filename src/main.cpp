@@ -338,6 +338,8 @@ void ButtonClick(){
         case CW_INTERFACE:
             //“恒功率待机界面”的操作会使得系统进入“恒功率设置界面”
             interface_status = WSET_INTERFACE;
+            //非本状态下，编码器仍然会动作，每次进入前清零之
+            encoder.setCount(0);
             //首次进入WSET界面，要执行状态初始化
             u8g2.firstPage();
             do {
@@ -353,6 +355,8 @@ void ButtonClick(){
         case CV_INTERFACE:
             //“恒压待机界面”的操作会使得系统进入“恒压设置界面”
             interface_status = VSET_INTERFACE;
+            //非本状态下，编码器仍然会动作，每次进入前清零之
+            encoder.setCount(0);
             //首次进入VSET界面，要执行状态初始化
             u8g2.firstPage();
             do {
@@ -368,6 +372,8 @@ void ButtonClick(){
         case WSET_INTERFACE:
             //“恒功率设置界面”的操作会使得系统进入“恒压设置界面”，如此循环
             interface_status = VSET_INTERFACE;
+            //非本状态下，编码器仍然会动作，每次进入前清零之
+            encoder.setCount(0);
             //首次进入VSET界面，要执行状态初始化
             u8g2.firstPage();
             do {
@@ -382,6 +388,8 @@ void ButtonClick(){
             break;
         case VSET_INTERFACE:
             interface_status = ITEMS_INTERFACE;
+            //非本状态下，编码器仍然会动作，每次进入前清零之
+            encoder.setCount(0);
             //先读一次文件，统计有多少条目
             readFile(LittleFS, "/log.txt");
             //首次进入ITEMS_INTERFACE界面，要执行状态初始化
@@ -394,6 +402,8 @@ void ButtonClick(){
             break;
         case ITEMS_INTERFACE:
             interface_status = WSET_INTERFACE;
+            //非本状态下，编码器仍然会动作，每次进入前清零之
+            encoder.setCount(0);
             //首次进入WSET界面，要执行状态初始化
             u8g2.firstPage();
             do {
@@ -413,8 +423,6 @@ void ButtonClick(){
     Serial.print("Button Click Change Status -- ");
     Serial.println(interface_status);
 	#endif
-
-
 }
 //状态机的另一个驱动来自时间的倒计时，该函数是不断重复执行的
 void TimeCountdownTick(){
@@ -537,19 +545,15 @@ void setup(){
     u8g2.begin();
     u8g2.firstPage();
     do {
-        u8g2.setFont(u8g2_font_6x10_tf);
-        u8g2.setCursor(3, 13);
-        u8g2.print("ODO:");u8g2.print((nvs_logger.ODO_Ws)/3600);u8g2.print("WH");
-        u8g2.setCursor(3, 23);
-        u8g2.print("ODO:");u8g2.print(nvs_logger.ODO_HS/3600);u8g2.print("H");u8g2.print(nvs_logger.ODO_HS%3600);u8g2.print("S");
-        u8g2.setCursor(3, 33);
-        u8g2.print("TRIP:");u8g2.print((nvs_logger.TRIP_Ws)/3600);u8g2.print("WH");
-        u8g2.setCursor(3, 43);
-        u8g2.print("TRIP:");u8g2.print(nvs_logger.TRIP_HS);u8g2.print("S");
-        u8g2.setCursor(3, 53);
-        u8g2.print("LAST_MODE:");u8g2.print(nvs_logger.LAST_MODE);
-        u8g2.setCursor(3, 63);
-        u8g2.print("LAST_SETTING:");u8g2.print(nvs_logger.LAST_SETTING);
+        u8g2.setFont(u8g2_font_8x13B_mf);
+        u8g2.setCursor(2, 16);
+        u8g2.print("ODO:");u8g2.print((nvs_logger.ODO_Ws)/3600);u8g2.print("wH");
+        u8g2.setCursor(2, 32);
+        u8g2.print("ODO:");u8g2.print(nvs_logger.ODO_HS/3600);u8g2.print("h");u8g2.print((nvs_logger.ODO_HS/60)%60);u8g2.print("m");u8g2.print(nvs_logger.ODO_HS%60);u8g2.print("s");
+        u8g2.setCursor(2, 48);
+        u8g2.print("DATE:");u8g2.print(now.year());u8g2.print("-");u8g2.print(now.month());u8g2.print("-");u8g2.print(now.day());
+        u8g2.setCursor(2, 64);
+        u8g2.print("TIME:");u8g2.print(now.hour());u8g2.print(":");u8g2.print(now.minute());u8g2.print(":");u8g2.print(now.second());
     } while ( u8g2.nextPage() );
 
     //每次开机检查,检查本次开机的时间，是不是和上次开机的时间，是同一天，如果不是。
@@ -594,8 +598,6 @@ void setup(){
     // appendFile(LittleFS, "/log.txt", "2025-03-13:107wh\r");
     // appendFile(LittleFS, "/log.txt", "2025-03-14:108wh\r");
 
-
-
     NimBLEDevice::init("NimBLE-Client");
     NimBLEDevice::setSecurityAuth(/*BLE_SM_PAIR_AUTHREQ_BOND | BLE_SM_PAIR_AUTHREQ_MITM |*/ BLE_SM_PAIR_AUTHREQ_SC);
     NimBLEDevice::setPower(3); /** 3dbm */
@@ -608,7 +610,11 @@ void setup(){
     #ifdef DEBUG
     Serial.printf("Scanning for peripherals\n");
     #endif
-
+    //修复一个bug，自动开机设置
+    delay(1000);
+    node.writeSingleRegister(0x0012,1);
+    //稍作延时，等待参数写入完毕
+    delay(50);
 }
 //主循环
 void loop(){
@@ -633,25 +639,6 @@ void loop(){
     TimeCountdownTick();
 
     if(START_INTERFACE == interface_status){
-        //显示重要数据，计划是5个，ODO_wh ODO_HS TRIP_WH TRIP_HS MODE
-        // //显示部分改为显示累积数值
-        // u8g2.begin();
-        // u8g2.firstPage();
-        // do {
-        //     u8g2.setFont(u8g2_font_6x10_tf);
-        //     u8g2.setCursor(3, 13);
-        //     u8g2.print("ODO:");u8g2.print((nvs_logger.ODO_Ws)/3600);u8g2.print("WH");
-        //     u8g2.setCursor(3, 23);
-        //     u8g2.print("ODO:");u8g2.print(nvs_logger.ODO_HS/3600);u8g2.print("H");u8g2.print(nvs_logger.ODO_HS%3600);u8g2.print("S");
-        //     u8g2.setCursor(3, 33);
-        //     u8g2.print("TRIP:");u8g2.print((nvs_logger.TRIP_Ws)/3600);u8g2.print("WH");
-        //     u8g2.setCursor(3, 43);
-        //     u8g2.print("TRIP:");u8g2.print(nvs_logger.TRIP_HS);u8g2.print("S");
-        //     u8g2.setCursor(3, 53);
-        //     u8g2.print("LAST_MODE:");u8g2.print(nvs_logger.LAST_MODE);
-        //     u8g2.setCursor(3, 63);
-        //     u8g2.print("LAST_SETTING:");u8g2.print(nvs_logger.LAST_SETTING);
-        // } while ( u8g2.nextPage() );
 
     }
     if(CW_INTERFACE == interface_status){
