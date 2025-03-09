@@ -710,6 +710,7 @@ void loop(){
     		if (result == node.ku8MBSuccess)
     		{
     			data_details.output_power = int(node.getResponseBuffer(0)/10);
+                // data_details.output_power = 350;
                 //功率大于100W，一切开始累计
                 if(data_details.output_power > 100)
                 {
