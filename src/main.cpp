@@ -1,6 +1,5 @@
 //重构循环结构，状态机驱动
 //开机界面、恒功率待机界面、恒电压待机界面、功率设置界面、电压设置界面、能耗统计界面
-
 #include "OneButton.h"
 #include <ESP32Encoder.h> 
 #include <Arduino.h>
@@ -13,6 +12,7 @@
 #include "RTClib.h"
 #include "FS.h"
 #include <LittleFS.h>
+
 //调试开关打开，则MODBUS从机失效，串口1会输出一些调试信息
 // #define DEBUG
 //设置界面的等待时间
@@ -36,7 +36,6 @@ ModbusMaster node;
 
 //定义RTC对象
 RTC_DS3231 rtc;
-
 
 //状态助记符和状态机参数
 #define START_INTERFACE 0
@@ -487,8 +486,28 @@ void frequency_meter()
 	}
 	data_details.cadence = int(cadence_sum/12);
 }
+
+//MODEBUS从机部分
+#define SLAVE_ID 1
+//定义1个从机类
+ModbusRTU mb;
+void modbusrtu_dataprepare()
+{
+	mb.addHreg(0);mb.Hreg(0,data_details.output_power);
+	mb.addHreg(1);mb.Hreg(1,data_details.cadence);
+	mb.addHreg(2);mb.Hreg(2,data_details.heart_rate);
+	mb.addHreg(3);mb.Hreg(3,data_details.max_output_power);
+	mb.addHreg(4);mb.Hreg(4,data_details.max_cadence);
+	mb.addHreg(5);mb.Hreg(5,data_details.max_heart_rate);
+	mb.addHreg(6);mb.Hreg(6,data_details.trip_time);
+}
+
 void setup(){
     Serial.begin(115200);
+    #ifndef DEBUG
+    mb.begin(&Serial);
+	mb.slave(SLAVE_ID);
+    #endif
 	//MODBUS主机部分
 	Serial2.begin(115200);
 	node.begin(1, Serial2);
@@ -514,7 +533,9 @@ void setup(){
     //尝试加载文件系统
     // LittleFS.format();
     if(!LittleFS.begin(FORMAT_LITTLEFS_IF_FAILED)){
+        #ifdef DEBUG
         Serial.println("LittleFS Mount Failed");
+        #endif
         return;
     }
     // appendFile(LittleFS, "/log.txt","hello again");
@@ -632,12 +653,16 @@ void loop(){
         }
         NimBLEDevice::getScan()->start(scanTimeMs, false, true);
     }
-
     //主循环中不断查询按键状态
     button.tick();
     //主循环中检查时间戳
     TimeCountdownTick();
-
+    //MODBUS从机服务
+    #ifndef DEBUG
+    modbusrtu_dataprepare();
+	mb.task();
+	yield();
+    #endif
     if(START_INTERFACE == interface_status){
 
     }
