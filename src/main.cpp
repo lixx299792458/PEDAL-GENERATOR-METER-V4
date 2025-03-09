@@ -6,7 +6,7 @@
 #include <U8g2lib.h>
 #include <SPI.h>
 #include <ModbusMaster.h>
-#include <ModbusRTU.h>
+// #include <ModbusRTU.h>
 #include <Preferences.h>
 #include <NimBLEDevice.h>
 #include "RTClib.h"
@@ -31,7 +31,7 @@ unsigned long inerface_status_time_stamp = 0;
 #define DT 36 // DT ENCODER 
 ESP32Encoder encoder;
 
-//modbus主机部分
+// modbus主机部分
 ModbusMaster node;
 
 //定义RTC对象
@@ -101,7 +101,7 @@ datatype data_details = {0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 
 unsigned long currentadjust_time_stamp = 0;
 unsigned long outputpower_updatetime_stamp = 0;
-
+unsigned long teleplot_updatetime_stamp = 0;
 //心率部分类的重载
 static const NimBLEAdvertisedDevice* advDevice;
 static bool                          doConnect  = false;
@@ -488,26 +488,27 @@ void frequency_meter()
 }
 
 //MODEBUS从机部分
-#define SLAVE_ID 1
-//定义1个从机类
-ModbusRTU mb;
-void modbusrtu_dataprepare()
-{
-	mb.addHreg(0);mb.Hreg(0,data_details.output_power);
-	mb.addHreg(1);mb.Hreg(1,data_details.cadence);
-	mb.addHreg(2);mb.Hreg(2,data_details.heart_rate);
-	mb.addHreg(3);mb.Hreg(3,data_details.max_output_power);
-	mb.addHreg(4);mb.Hreg(4,data_details.max_cadence);
-	mb.addHreg(5);mb.Hreg(5,data_details.max_heart_rate);
-	mb.addHreg(6);mb.Hreg(6,data_details.trip_time);
-}
+// #define SLAVE_ID 1
+// //定义1个从机类
+// ModbusRTU mb;
+// void modbusrtu_dataprepare()
+// {
+// 	mb.addHreg(0);mb.Hreg(0,data_details.output_power);
+// 	mb.addHreg(1);mb.Hreg(1,data_details.cadence);
+// 	mb.addHreg(2);mb.Hreg(2,data_details.heart_rate);
+// 	mb.addHreg(3);mb.Hreg(3,data_details.max_output_power);
+// 	mb.addHreg(4);mb.Hreg(4,data_details.max_cadence);
+// 	mb.addHreg(5);mb.Hreg(5,data_details.max_heart_rate);
+// 	mb.addHreg(6);mb.Hreg(6,data_details.trip_time);
+// }
 
 void setup(){
     Serial.begin(115200);
-    #ifndef DEBUG
-    mb.begin(&Serial);
-	mb.slave(SLAVE_ID);
-    #endif
+    // #ifndef DEBUG
+    // mb.begin(&Serial);
+	// mb.slave(SLAVE_ID);
+    // #endif
+
 	//MODBUS主机部分
 	Serial2.begin(115200);
 	node.begin(1, Serial2);
@@ -658,11 +659,24 @@ void loop(){
     //主循环中检查时间戳
     TimeCountdownTick();
     //MODBUS从机服务
+    // #ifndef DEBUG
+    // modbusrtu_dataprepare();
+	// mb.task();
+	// yield();
+    // #endif
+
+    //改为teleplot工具
     #ifndef DEBUG
-    modbusrtu_dataprepare();
-	mb.task();
-	yield();
+    //但是工作不可以太频繁，1S吧还是
+    unsigned long teleplot_updatetime_gap = millis() - teleplot_updatetime_stamp;
+    if(teleplot_updatetime_gap > 1000){
+        Serial.print(">power:");Serial.println(data_details.output_power);
+        Serial.print(">cadence:");Serial.println(data_details.cadence);
+        Serial.print(">heart_rate:");Serial.println(data_details.heart_rate);
+        teleplot_updatetime_stamp = millis();
+    }
     #endif
+
     if(START_INTERFACE == interface_status){
 
     }
