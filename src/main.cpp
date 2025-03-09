@@ -157,7 +157,7 @@ void notifyCB(NimBLERemoteCharacteristic* pRemoteCharacteristic, uint8_t* pData,
 
     data_details.heart_rate = pData[1];
     //刷新该时间，可以使得心率在长时间不中断的情况下清零
-	cadence_time_stamp = millis();
+	heart_rate_time_stamp = millis();
     std::string str  = (isNotify == true) ? "Notification" : "Indication";
     str             += " from ";
     str             += pRemoteCharacteristic->getClient()->getPeerAddress().toString();
@@ -666,21 +666,21 @@ void loop(){
             u8g2.print(data_details.output_power);u8g2.print("W");
 
 			u8g2.setFont(u8g2_font_VCR_OSD_tu);
-            if(0 == data_details.cadence){
+            if(data_details.cadence < 10){
                 u8g2.setCursor(69, 24);
                 u8g2.print("---");
             }
-            else{
+            if(data_details.cadence > 10){
                 u8g2.setCursor(69, 24);
                 u8g2.print(data_details.cadence);u8g2.print("R");
             }
 
             u8g2.setFont(u8g2_font_VCR_OSD_tu);
-            if(0 == data_details.heart_rate){
+            if(data_details.heart_rate < 20){
                 u8g2.setCursor(6, 55);
                 u8g2.print("---");
-            }
-            else{
+            } 
+            if(data_details.heart_rate > 20){
                 u8g2.setCursor(6, 55);
                 u8g2.print(data_details.heart_rate);u8g2.print("B");                
             }
@@ -756,7 +756,7 @@ void loop(){
             data_details.cadence = 0;
         }
         unsigned long heart_rate_gap = millis() - heart_rate_time_stamp;
-        if(cadence_gap > 5000){
+        if(heart_rate_gap > 5000){
             data_details.heart_rate = 0;
         }
 
@@ -779,21 +779,21 @@ void loop(){
             u8g2.print(data_details.output_power);u8g2.print("W");
 
 			u8g2.setFont(u8g2_font_VCR_OSD_tu);
-            if(0 == data_details.cadence){
+            if(data_details.cadence < 10){
                 u8g2.setCursor(69, 24);
                 u8g2.print("---");
             }
-            else{
+            if(data_details.cadence > 10){
                 u8g2.setCursor(69, 24);
                 u8g2.print(data_details.cadence);u8g2.print("R");
             }
 
             u8g2.setFont(u8g2_font_VCR_OSD_tu);
-            if(0 == data_details.heart_rate){
+            if(data_details.heart_rate < 20){
                 u8g2.setCursor(6, 55);
                 u8g2.print("---");
-            }
-            else{
+            } 
+            if(data_details.heart_rate > 20){
                 u8g2.setCursor(6, 55);
                 u8g2.print(data_details.heart_rate);u8g2.print("B");                
             }
@@ -855,7 +855,7 @@ void loop(){
             data_details.cadence = 0;
         }
         unsigned long heart_rate_gap = millis() - heart_rate_time_stamp;
-        if(cadence_gap > 5000){
+        if(heart_rate_gap > 5000){
             data_details.heart_rate = 0;
         }
     }
