@@ -594,9 +594,9 @@ void setup(){
         //将昨天的单日明细写入某个永久存储
         //写入年月日和瓦时数明细,写入的时候就得考虑怎么方便读取
         std::string logstr = "";
-        logstr += std::to_string(now.year());
-        logstr += "-" + std::to_string(now.month());
-        logstr += "-" + std::to_string(now.day());
+        logstr += std::to_string(nvs_logger.YEAR);
+        logstr += "-" + std::to_string(nvs_logger.MONTH);
+        logstr += "-" + std::to_string(nvs_logger.DAY);
         logstr += ":" + std::to_string(nvs_logger.TRIP_Ws/3600) + "wh\r";
         #ifdef DEBUG
         Serial.print("log info str is:");
