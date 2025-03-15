@@ -503,6 +503,14 @@ void frequency_meter()
 // }
 
 void setup(){
+    //需要初始化测试数据，比如ODO什么的
+    // preferences.begin("nvs-log", false);
+    // preferences.getBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
+    // nvs_logger.ODO_HS = 0;
+    // nvs_logger.ODO_Ws = 0;
+    // preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
+    // delay(100000);
+
     Serial.begin(115200);
     // #ifndef DEBUG
     // mb.begin(&Serial);
@@ -555,6 +563,8 @@ void setup(){
     //取出永久存储的设置
     preferences.begin("nvs-log", false);
     preferences.getBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
+    //参数在屏幕上看不全，打印之方便查看
+    //todo
     data_details.trip_time = nvs_logger.TRIP_HS;
     last_interface_status = nvs_logger.LAST_MODE;
     if(1 == last_interface_status){
