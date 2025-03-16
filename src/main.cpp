@@ -509,7 +509,12 @@ void setup(){
     // nvs_logger.ODO_HS = 0;
     // nvs_logger.ODO_Ws = 0;
     // preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
-    // delay(100000);
+    // while(1);
+
+    //时钟的存在与否，在已经正常运行后再调整代码的过程中非常重要，读取不到时钟，就会破坏日能耗清单。
+    if(false == rtc.begin()){
+        while(1);
+    }
 
     Serial.begin(115200);
     // #ifndef DEBUG
@@ -520,10 +525,11 @@ void setup(){
 	//MODBUS主机部分
 	Serial2.begin(115200);
 	node.begin(1, Serial2);
-    //时钟初始化
-    rtc.begin();
+    //初始化时钟
+    // rtc.begin();
     //设置时间，执行一次即可
     // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    // while(1);
     //显示一次时间
     DateTime now = rtc.now();
     #ifdef DEBUG
