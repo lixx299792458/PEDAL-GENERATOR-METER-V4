@@ -744,7 +744,6 @@ void loop(){
 			// MODBUS更新部分，要不断的更新，因为输出电压在不断变化
 			uint16_t current_set = 0;
 			//读取输出电压
-            digitalWrite(TRAFFIC_BLINK,1);
 			uint8_t result = node.readHoldingRegisters(2, 1);
 			if (result == node.ku8MBSuccess)
 			{
@@ -757,7 +756,6 @@ void loop(){
 			node.setTransmitBuffer(0, 1590);
 			node.setTransmitBuffer(1, current_set);
 			result = node.writeMultipleRegisters(0, 2);
-            digitalWrite(TRAFFIC_BLINK,0);
 			// //稍作延时，否则读写DC-DC的频率太高了,
 			delay(50);
 			currentadjust_time_stamp = millis();
@@ -765,10 +763,10 @@ void loop(){
         //更新1S频率的任务，检查最大值，更新永久累计和设定
     	unsigned long outputpower_updatetime_gap = millis() - outputpower_updatetime_stamp;
     	if(outputpower_updatetime_gap > 1000){
-            digitalWrite(TRAFFIC_BLINK,1);
     		uint8_t result = node.readHoldingRegisters(4, 1);
     		if (result == node.ku8MBSuccess)
     		{
+                digitalWrite(TRAFFIC_BLINK,1);
     			data_details.output_power = int(node.getResponseBuffer(0)/10);
                 // data_details.output_power = 350;
                 //功率大于100W，一切开始累计
@@ -785,6 +783,7 @@ void loop(){
                     preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
                 }
     		}
+            delay(5);
             //通讯指示灯
             digitalWrite(TRAFFIC_BLINK,0);
             //更新最大值
@@ -859,21 +858,19 @@ void loop(){
         //驱动电源板，不断改变其设置，改成5S更新一次，且每次更新完，读取数据之前，需要延时，否则会卡住
 		unsigned long currentadjust_time_gap = millis() - currentadjust_time_stamp;
 		if(currentadjust_time_gap > 5000){
-            digitalWrite(TRAFFIC_BLINK,1);
 			node.setTransmitBuffer(0, voltage_set);
 			node.setTransmitBuffer(1, 2000);
 			uint8_t result = node.writeMultipleRegisters(0, 2);
 			delay(50);
 			currentadjust_time_stamp = millis();
-            digitalWrite(TRAFFIC_BLINK,0);
 		}
         //更新1S频率的任务，检查最大值，更新永久累计和设定
     	unsigned long outputpower_updatetime_gap = millis() - outputpower_updatetime_stamp;
     	if(outputpower_updatetime_gap > 1000){
-            digitalWrite(TRAFFIC_BLINK,1);
     		uint8_t result = node.readHoldingRegisters(4, 1);
     		if (result == node.ku8MBSuccess)
     		{
+                digitalWrite(TRAFFIC_BLINK,1);
     			data_details.output_power = int(node.getResponseBuffer(0)/10);
                 //功率大于100W，一切开始累计
                 if(data_details.output_power > 100)
@@ -889,6 +886,7 @@ void loop(){
                     preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
                 }
     		}
+            delay(5);
             digitalWrite(TRAFFIC_BLINK,0);
             //更新最大值
             if(data_details.output_power > data_details.max_output_power)
