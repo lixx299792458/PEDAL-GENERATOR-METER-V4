@@ -33,7 +33,7 @@ ESP32Encoder encoder;
 
 // modbus主机部分
 ModbusMaster node;
-
+#define TRAFFIC_BLINK 2
 //定义RTC对象
 RTC_DS3231 rtc;
 
@@ -525,6 +525,7 @@ void setup(){
 	//MODBUS主机部分
 	Serial2.begin(115200);
 	node.begin(1, Serial2);
+    pinMode(TRAFFIC_BLINK,OUTPUT);
     //初始化时钟
     // rtc.begin();
     //设置时间，执行一次即可
@@ -652,9 +653,12 @@ void setup(){
     #endif
     //修复一个bug，自动开机设置
     delay(1000);
+    digitalWrite(TRAFFIC_BLINK,1);
     node.writeSingleRegister(0x0012,1);
     //稍作延时，等待参数写入完毕
     delay(50);
+    digitalWrite(TRAFFIC_BLINK,0);
+
 }
 //主循环
 void loop(){
@@ -740,6 +744,7 @@ void loop(){
 			// MODBUS更新部分，要不断的更新，因为输出电压在不断变化
 			uint16_t current_set = 0;
 			//读取输出电压
+            digitalWrite(TRAFFIC_BLINK,1);
 			uint8_t result = node.readHoldingRegisters(2, 1);
 			if (result == node.ku8MBSuccess)
 			{
@@ -752,6 +757,7 @@ void loop(){
 			node.setTransmitBuffer(0, 1590);
 			node.setTransmitBuffer(1, current_set);
 			result = node.writeMultipleRegisters(0, 2);
+            digitalWrite(TRAFFIC_BLINK,0);
 			// //稍作延时，否则读写DC-DC的频率太高了,
 			delay(50);
 			currentadjust_time_stamp = millis();
@@ -759,6 +765,7 @@ void loop(){
         //更新1S频率的任务，检查最大值，更新永久累计和设定
     	unsigned long outputpower_updatetime_gap = millis() - outputpower_updatetime_stamp;
     	if(outputpower_updatetime_gap > 1000){
+            digitalWrite(TRAFFIC_BLINK,1);
     		uint8_t result = node.readHoldingRegisters(4, 1);
     		if (result == node.ku8MBSuccess)
     		{
@@ -778,6 +785,8 @@ void loop(){
                     preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
                 }
     		}
+            //通讯指示灯
+            digitalWrite(TRAFFIC_BLINK,0);
             //更新最大值
             if(data_details.output_power > data_details.max_output_power)
             {
@@ -850,15 +859,18 @@ void loop(){
         //驱动电源板，不断改变其设置，改成5S更新一次，且每次更新完，读取数据之前，需要延时，否则会卡住
 		unsigned long currentadjust_time_gap = millis() - currentadjust_time_stamp;
 		if(currentadjust_time_gap > 5000){
+            digitalWrite(TRAFFIC_BLINK,1);
 			node.setTransmitBuffer(0, voltage_set);
 			node.setTransmitBuffer(1, 2000);
 			uint8_t result = node.writeMultipleRegisters(0, 2);
 			delay(50);
 			currentadjust_time_stamp = millis();
+            digitalWrite(TRAFFIC_BLINK,0);
 		}
         //更新1S频率的任务，检查最大值，更新永久累计和设定
     	unsigned long outputpower_updatetime_gap = millis() - outputpower_updatetime_stamp;
     	if(outputpower_updatetime_gap > 1000){
+            digitalWrite(TRAFFIC_BLINK,1);
     		uint8_t result = node.readHoldingRegisters(4, 1);
     		if (result == node.ku8MBSuccess)
     		{
@@ -877,6 +889,7 @@ void loop(){
                     preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
                 }
     		}
+            digitalWrite(TRAFFIC_BLINK,0);
             //更新最大值
             if(data_details.output_power > data_details.max_output_power)
             {
