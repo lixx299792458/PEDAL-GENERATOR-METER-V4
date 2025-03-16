@@ -620,6 +620,8 @@ void setup(){
         nvs_logger.TRIP_HS = 0;
         nvs_logger.TRIP_Ws = 0;
         preferences.putBytes("nvs-log", &nvs_logger, sizeof(nvs_logger));
+        //新的一天注意清零数据
+        data_details.trip_time = 0;
     }
 
     //写入测试内容
